@@ -4,7 +4,7 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=SyntaxWarning)
 
-import pickle
+import pickle5 as pickle
 import json
 import os
 
