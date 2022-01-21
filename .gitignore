@@ -1,4 +1,4 @@
-input_data/
+input_data/*
 !input_data/taxonomies/unique_indices
 !input_data/taxonomies/unique_topics
 visualization/
