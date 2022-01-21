@@ -1,4 +1,8 @@
-input_data/*
+input_data/text_collections/*
+input_data/ASTs/*
+input_data/relevance_matrices/*
+input_data/similarity_matrices/*
+input_data/taxonomies/*
 !/input_data/taxonomies/unique_indices
 !/input_data/taxonomies/unique_topics
 visualization/
