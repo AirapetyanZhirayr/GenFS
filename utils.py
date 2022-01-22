@@ -6,7 +6,23 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 def blur_array(n, size):
+    """
+    Computes a linear transformation A(x), that averages(blurs) values in A using window of size n
+    Parameters
+    ----------
+    n : int
+        size of blur window
+    
+    size: int
+        size of vector on which A should apply
+
+    Returns
+    -------
+    A : ndarray of shape (size, size)
+        Matrix of linear transformation A(x)
+    """
     A = np.zeros(shape=(size, size))
+
     for i in range(size):
         if i - n//2 > 0:
             A[i, i-n//2:i+n//2 + 1] = 1
