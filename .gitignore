@@ -1,4 +1,4 @@
-.DS_STORE
+.DS_Store
 input_data/text_collections/*
 input_data/ASTs/*
 input_data/relevance_matrices/*
