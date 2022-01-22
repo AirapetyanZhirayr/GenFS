@@ -1,6 +1,3 @@
-import matplotlib.pyplot as plt
-import numpy as np
-
 from libs import *
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
@@ -12,7 +9,7 @@ def blur_array(n, size):
     ----------
     n : int
         size of blur window
-    
+
     size: int
         size of vector on which A should apply
 
@@ -34,10 +31,23 @@ def blur_array(n, size):
 
 
 def gaussian_kernel(x1, x2, sigma=12):
-    diff_vec = x1 - x2
-    diff_len_sq = diff_vec.T@diff_vec
-#     print(diff_len_sq)
-    similarity = np.exp(-diff_len_sq / sigma**2)
+    """
+
+    Given two ndim arrays x1 and x2 computers their similarity using gaussian kernel.
+    Parameters
+    ----------
+    x1 : ndarray of shape (x, )
+    x2 : ndarray of shape (x, )
+    sigma : int, default = 12
+        Sigma is the variance hyperparameter in gaussian similarity kernel
+
+    Returns
+    -------
+
+    """
+    diff_vec = x1 - x2  # difference vector
+    diff_len_sq = diff_vec.T@diff_vec # length of difference vector squared
+    similarity = np.exp(-diff_len_sq / sigma**2)  # similarity between x1 and x2
     return similarity
 
 
