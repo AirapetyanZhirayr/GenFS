@@ -52,7 +52,7 @@ def gaussian_kernel(x1, x2, sigma=12):
 
 
 def get_unique_topics(taxonomy):
-    '''
+    """
     Given a Taxonomy object extracts unique leaf names from it
 
     Parameters
@@ -66,7 +66,7 @@ def get_unique_topics(taxonomy):
     topics_idx : list
         list of indices of leaves in order from topics_unique
 
-    '''
+    """
     topics_unique = []
     topics_idx = []
     added_topics = set()
@@ -79,10 +79,23 @@ def get_unique_topics(taxonomy):
     return topics_unique, topics_idx
 
 
-def get_random_txt_subset(texts, n=5000, r_s=None):
-    np.random.seed(r_s)
-    idx = np.random.choice(range(len(texts)), n, replace=False, )
-    return texts[idx]
+# def get_random_txt_subset(texts, n=5000, r_s=None):
+#     '''
+#
+#     Parameters
+#     ----------
+#     texts
+#     n
+#     r_s : int or None, default=None
+#         random_seed
+#
+#     Returns
+#     -------
+#
+#     '''
+#     np.random.seed(r_s)
+#     idx = np.random.choice(range(len(texts)), n, replace=False, )
+#     return texts[idx]
 
 
 class Clusters:
