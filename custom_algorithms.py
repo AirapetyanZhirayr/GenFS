@@ -1,10 +1,365 @@
 """
 Custom realization of some algorithms
 """
+from sklearn.manifold import spectral_embedding
+from sklearn.cluster import KMeans
+from fcmeans import FCM
 from libs import *
+import text_utils
 from sklearn.feature_extraction.text import TfidfVectorizer
 from nltk.corpus import stopwords
+from utils import blur_array
 nltk_stop_words = tuple(stopwords.words('english'))
+
+
+class FSC:
+    """
+    Fuzzy Spectral Clustering Algorithm
+    Idea ::
+    Given a symmetric similarity matrix S between objects, the inverse normalized
+    Laplacian L_inv is computed. The first k (not a parameter) eigenvectors and eigenvalues
+    of L_inv are chosen to approximate L_inv with the specified accuracy mat_diff (parameter),
+    in the sense that ||L_inv - L_inv_approx|| < mat_diff, where matrix norm is
+    the Frobenius norm divided by the number of objects squared.
+
+    Each of those k eigenvectors are used to extract 2 clusters. One that consists of positive
+    entries of eigenvector and one of negative entries. Entries that are close to 0 are left
+    unclassified. If we sort the eigenvector by it's values, the locations of unclassified
+    entries are the locations where we are flat, or in other words the derivative is close to 0.
+    This happens because unclassified objects get nearly the same values in eigenvectors of
+    Laplacian.
+
+        Parameters
+    ----------
+    mat_diff : float, default=0.003
+        The max. acceptable value of norm of difference matrix between the approximated L_inv
+        and true one. The matrix norm is the Frobenius norm divided by number of objects squared.
+
+    """
+    def __init__(self, mat_diff=0.003, derivative_scale=0.001):
+
+        self.mat_diff = mat_diff
+        self.eps = derivative_scale
+
+        self.sim_mat = None
+        self.lapin = LapInTransformer()
+
+        self.L_inv = None  # inverse Laplacian
+        self.k = None  # number of considered eigenvalues
+        self.diff_array = None  # list of approximation differences., the index is the rank-1 of the approximation
+        self.eigenvectors = None  # ndarray of first k eigenvectors of Laplacian
+        self.eigenvalues = None # ndarray of all eigenvalues of Laplacian
+
+    def fit(self, sim_mat):
+        self.sim_mat = sim_mat
+        self.lapin.fit(self.sim_mat)  # computing inverse Laplacian
+        self.L_inv = self.lapin.L_inv
+
+        lam = self.lapin.lam  # eigenvalues of Laplacian
+        self.eigenvalues = lam
+        V = self.lapin.V  # eigenvectors of Laplacian
+        self.k = self.get_n_clusters(lam, V)
+
+        V_k = V[:, :self.k]  # first k eigenvalues of Laplacian
+        self.eigenvectors = V_k
+        # lam_k = lam[:self.k] # first k eigenvectors of Laplacian
+
+        self.mm = self.extract_clusters(V_k)  # membership matrix
+
+    def get_n_clusters(self, lam, V):
+        diff = np.inf
+        k = 0
+        self.diff_array = []
+        while diff > self.mat_diff:
+            k += 1
+
+            lam_k = np.diag(lam[:k])  # first k eigvalues of Laplacian
+            lam_k_inv = np.linalg.pinv(lam_k)  # largest k eigvalues of inverse Laplacian
+            L_inv_approx = V[:, :k]@lam_k_inv@V[:, :k].T
+
+            # diff = np.linalg.norm(L_inv_approx-self.L_inv, ord='fro')
+            diff = ((L_inv_approx - self.L_inv)**2).mean()
+            self.diff_array.append(diff)
+
+        return k
+
+    def extract_clusters(self, V):
+        n_objects, emb_dim = V.shape
+        blur_A = blur_array(5, n_objects-1)  # -1 because of diff
+        mm = []  # membership matrix
+        for i in range(emb_dim):
+            v = V[:, i]
+            argsort = np.argsort(v)
+            _v = v[argsort]
+            diff = blur_A @ np.diff(_v)  # last point has no diff
+            diff = np.append(diff, diff[-1])  # to account for last point
+
+            # bringing the order back
+            diff = diff[np.argsort(argsort)]
+
+            d_mask = (diff > self.eps)
+
+            pos_class = d_mask & (v > 0)
+            neg_class = d_mask & (v < 0)
+
+            v_pos = v.copy()
+            v_pos[~pos_class] = 0.
+            v_neg = v.copy()
+            v_neg[~neg_class] = 0.
+            v_neg = - v_neg
+
+            mm.append(v_pos)
+            mm.append(v_neg)
+
+        return np.c_[mm].T
+
+
+class LaplacianFCM:
+    """Laplacian Fuzzy C-Means clustering.
+    Given a symmetric similarity matrix S between objects, objects are
+    embedded into the space of first n eigen vectors of normalized Laplacian.
+    Those embedded vectors are classified using Fuzzy C-Means
+
+    Parameters
+    ----------
+    n_clusters : int, default=8
+        The number of clusters to form as well as the number of
+        centroids to generate in Fuzzy C-Means
+
+    embedding_dim : int, default=8
+        The number of eigenvectors of Laplacian Matrix to use
+        as embedding
+
+    random_state : int, RandomState instance or None, default=None
+        Determines random number generation for centroid initialization. Use
+        an int to make the randomness deterministic.
+
+
+    Attributes
+    ----------
+
+   """
+    def __init__(self,
+                 # topics,
+                 n_clusters=8, embedding_dim=8, random_state=None, m=1.4):
+        # self.topics = np.array(topics)
+        self.n_clusters = n_clusters
+        self.embedding_dim = embedding_dim
+        self.random_state = random_state
+        if self.random_state:
+            np.random.seed(self.random_state)
+        self.m = m
+
+        self.embedding = None
+        self.kmeans = None
+        self.fcm = None
+        self.mm = None  # membership matrix
+
+    def fit(self, sim_mat):
+        """Compute Laplacian FCM clustering.
+
+        Parameters
+        ----------
+        sim_mat : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Training instances to cluster.
+
+
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+        """
+        self.embedding = spectral_embedding(sim_mat, drop_first=True,
+                                            n_components=self.embedding_dim,
+                                            norm_laplacian=True,
+                                            random_state=self.random_state)
+
+        self.kmeans = KMeans(n_clusters=self.n_clusters,
+                             random_state=self.random_state)
+        #
+        self.kmeans.fit(self.embedding)
+        self.kmeans.u = self.create_membership_matrix(self.kmeans.labels_)
+        # self.kmeans.u = utils.Clusters(membership_matrix=self.kmeans.u.copy(),
+        #                                topics=self.topics,
+        #                                random_state=self.random_state)
+
+        self.fcm = FCM(n_clusters=self.n_clusters, max_iter=400, m=self.m,
+                       random_state=self.random_state)
+
+        self.fcm.fit(self.embedding)
+
+        self.mm = self.fcm.u.copy()
+
+        # self.fcm.u = utils.Clusters(membership_matrix=self.fcm.u.copy(),
+        #                             topics=self.topics,
+        #                             random_state=self.random_state)
+        return self
+
+    @staticmethod
+    def create_membership_matrix(labels):
+        n_entities = len(labels)
+        n_cl = np.max(labels) + 1
+        u = np.zeros(shape=(n_entities, n_cl))
+        for i in range(n_cl):
+            cl_mask = (labels == i)
+            u[cl_mask, i] = 1.
+        return u
+
+
+class LaplacianEigenMaps:
+    """
+    This class implements Laplacian EigenMaps algorithm available in sklearn as
+    sklearn.manifold.spectral_embedding.
+    This toy implementations is made just for understanding the steps of the algo.
+
+    Parameters
+    ----------
+    n_components: int, default=8
+        embedding dimension., number of eigenvectors of Laplacian matrix
+        used for embedding
+
+    drop_first: bool, default=True
+        To use the first eigenvector with zero eigenvalue or not
+
+    Attributes
+    -----------
+    embedding : ndarray of shape (n_objects, n_components)
+        matrix of first eigenvectors of Normalized Laplacian
+
+    eigenvalues: ndarray of shape (n_components, )
+        vector of first eigenvalues of Normalized Laplacian
+    """
+    def __init__(self, n_components=8, drop_first=True):
+        self.drop_first = drop_first
+        self.n_components = n_components
+
+        self.embedding = None
+        self.eigenvalues = None
+
+    def fit(self, W):
+        assert np.allclose(W, W.T), "similarity matrix is not symmetric"
+
+        D = np.diag(W.sum(axis=0))  # matrix of degrees of vertices
+        L = D - W  # Laplacian matrix
+        _D = np.linalg.inv(np.sqrt(D))
+        Ln = _D@L@_D  # normalized Laplacian matrix
+
+        lam, V = np.linalg.eigh(Ln)  # computing eigenvectors and eigenvalues of normalized Laplacian
+        start_idx = 1 if self.drop_first else 0
+        lam = lam[start_idx: self.n_components+start_idx]
+        V = V[:, start_idx:self.n_components+start_idx]
+        self.embedding = V
+        self.eigenvalues = lam
+
+
+class LapInTransformer:
+    """
+    Computes graphs Laplacian, it's pseudo inverse, it's eigenvalues  and eigenvectors
+    given similarity matrix W.
+
+
+    Parameters
+    ----------
+
+    verbose : bool, default=False
+        Controls the verbosity.
+
+        Attributes
+    ----------
+    lam : 1-D ndarray
+        All non-zero eigenvalues of normalized Laplacian
+
+    Lam : 2-D ndarray
+        Square diagonal matrix with Lam[i][i] = lam[i]
+
+    n_zero_eigval : int
+        Number of zero eigenvalues of Laplacian
+
+    condition : ndarray[bool]
+        Mask of non-zero eigenvalues
+
+    V : 2-D ndarray of shape (n_objects, x)
+        Matrix of eigenvectors of Laplacian with non-zero eigenvalues
+
+    L : 2-D ndarray of shape (n_objects, n_objects)
+        Laplacian Matrix
+
+    Ln : 2-D ndarray of shape (n_objects, n_objects)
+        Normalized Laplacian Matrix
+
+    L_inv: 2-D ndarray of shape (n_objects, n_objects)
+        Pseudo Inverse of Normalized Laplacian Matrix
+   """
+
+    def __init__(self, verbose=False):
+        self.verbose = verbose
+
+        self.lam = None
+        self.condition = None
+        self.n_zero_eigval = None
+        self.Lam = None
+        self.V = None
+        self.L = None
+        self.Ln = None
+        self.L_inv = None
+
+    def fit(self, W):
+        """
+
+        Parameters
+        ----------
+        W: ndarray,
+            symmetric similarity matrix of objects
+
+        """
+
+        assert np.allclose(W, W.T), "similarity matrix is not symmetric"
+
+        mat_dim = W.shape[0]  # number of objects
+        Identity = np.eye(mat_dim)  # identity matrix
+
+        D = np.diag(W.sum(axis=1))  # matrix of degrees of vertices
+        assert np.alltrue(W.sum(axis=1) > 0.), "Similarity matrix W has a zero column"
+        _D = np.linalg.inv(np.sqrt(D))
+
+        Ln = Identity - _D@W@_D  # normalized Laplacian
+        L = D - W  # unnormalized Laplacian
+
+        lam, V = np.linalg.eigh(Ln)  # computing eigenvectors and eigenvalues
+        condition = ~np.isclose(lam, 0, atol=1e-08)
+        self.n_zero_eigval = np.sum(~condition)
+        if self.verbose:
+            print(f'Number of connected components: {self.n_zero_eigval}')
+
+        # computing pseudo inverse of Laplacian
+        self.condition = condition
+        lam = lam[condition]
+        V = V[:, condition]
+        Lam = np.diag(lam)  # diagonal matrix of eigenvalues
+        L_inv = V@np.linalg.inv(Lam)@V.T
+
+        self.lam = lam
+        self.condition = condition
+        self.Lam = Lam
+        self.V = V
+        self.L = L
+        self.Ln = Ln
+        self.L_inv = L_inv
+
+    def fit_transform(self, W):
+        """
+
+        Parameters
+        -------
+        W: ndarray,
+            symmetric similarity matrix of objects
+
+        Returns
+        -------
+        the Pseudo Inverse of Laplacian matrix
+        """
+        self.fit(W)
+        return self.L_inv
 
 
 class TFIDF:
@@ -232,47 +587,52 @@ class TFIDF:
         return scores1 @ scores2
 
 
-class LaplacianEigenMaps:
+class AST:
     """
-    This class implements Laplacian EigenMaps algorithm available in sklearn as
-    sklearn.manifold.spectral_embedding.
-    This toy implementations is made just for understanding the steps of the algo.
+    Annotated Suffix Trees (AST)
 
-    Parameters
-    ----------
-    n_components: int, default=8
-        embedding dimension., number of eigenvectors of Laplacian matrix
-        used for embedding
-
-    drop_first: bool, default=True
-        To use the first eigenvector with zero eigenvalue or not
-
-    Attributes
-    -----------
-    embedding : ndarray of shape (n_objects, n_components)
-        matrix of first eigenvectors of Normalized Laplacian
-
-    eigenvalues: ndarray of shape (n_components, )
-        vector of first eigenvalues of Normalized Laplacian
+    Given a collection of topics (key words) and a collection of texts
+        computes a relevance matrix of each topic to each text using
+        Annotated Trees built for texts.
     """
-    def __init__(self, n_components=8, drop_first=True):
-        self.drop_first = drop_first
-        self.n_components = n_components
 
-        self.embedding = None
-        self.eigenvalues = None
+    def __init__(self, ):
+        tqdm.pandas()
+        self.AST_trees = {}
 
-    def fit(self, W):
-        assert np.allclose(W, W.T), "similarity matrix is not symmetric"
+        self.relevance_matrix = None
+        self.topics_ast = None
 
-        D = np.diag(W.sum(axis=0))  # matrix of degrees of vertices
-        L = D - W  # Laplacian matrix
-        _D = np.linalg.inv(np.sqrt(D))
-        Ln = _D@L@_D  # normalized Laplacian matrix
+    def fit(self, texts, topics):
 
-        lam, V = np.linalg.eigh(Ln)  # computing eigenvectors and eigenvalues of normalized Laplacian
-        start_idx = 1 if self.drop_first else 0
-        lam = lam[start_idx: self.n_components+start_idx]
-        V = V[:, start_idx:self.n_components+start_idx]
-        self.embedding = V
-        self.eigenvalues = lam
+        print("BUILDING AST'S FOR TEXTS")
+        for i, text in enumerate(tqdm(texts)):
+            if i not in self.AST_trees:
+                ast = self.build_ast(text)
+                self.AST_trees[i] = ast
+
+        print("BUILDING relevance_matrix")
+        self.relevance_matrix = np.empty((len(texts), len(topics)))
+        self.topics_ast = self.preprocess_topics(topics)
+
+        for i, ast in tqdm(self.AST_trees.items()):
+            self.relevance_matrix[i] = np.array(self.score(ast))
+
+    @staticmethod
+    def build_ast(text, n_words=5):
+        return east.asts.base.AST.get_ast(east.utils.text_to_strings_collection(text, words=n_words))
+
+    def score(self, ast):
+        return [ast.score(t) for t in self.topics_ast]
+
+    @staticmethod
+    def preprocess_topics(topics):
+        topics_ast = []
+        for topic in topics:
+            topics_ast.append(east.utils.prepare_text(
+                text_utils.preprocess_text(topic)
+            )
+                              .replace(' ', '')
+                              )
+
+        return topics_ast
