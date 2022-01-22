@@ -52,15 +52,29 @@ def gaussian_kernel(x1, x2, sigma=12):
 
 
 def get_unique_topics(taxonomy):
+    '''
+    Given a Taxonomy object extracts unique leaf names from it
+
+    Parameters
+    ----------
+    taxonomy : Taxonomy object
+
+    Returns
+    -------
+    topics_unique : list
+        list of unique leaf names of the taxonomy
+    topics_idx : list
+        list of indices of leaves in order from topics_unique
+
+    '''
     topics_unique = []
     topics_idx = []
-    '''
-    :return: unique topics from given list without messing the order
-    '''
+    added_topics = set()
     for leaf in taxonomy.leaves:
-        if leaf.name not in topics_unique:
+        if leaf.name not in added_topics:
             topics_unique.append(leaf.name)
             topics_idx.append(leaf.index)
+            added_topics.append(leaf.name)
 
     return topics_unique, topics_idx
 
