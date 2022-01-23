@@ -124,6 +124,7 @@ class FADDIS:
             curr_itteration += 1
 
         self.clusters = np.vstack(self.clusters)  # one row -- one cluster
+        self.mm = self.clusters.T.copy()
 
 
         if not self.cont_is_positive:
