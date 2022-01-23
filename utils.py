@@ -99,19 +99,38 @@ def get_unique_topics(taxonomy):
 
 
 class Clusters:
-    def __init__(self, membership_matrix, topics, embeddings, random_state):
+    """
+    This class is created for convenient use of extracted clusters. Operates under fuzzy membership matrix
+    and provides different usefull things like saving printing and visualizing the given clusters.
+    Parameters
+    ----------
+    membership_matrix : ndarray of shape (n_objects, n_clusters)
+        matrix of extracted clusters
+    topics : list or ndarray
+        list of object names
 
+    embedding: ndarray of shape (n_objects, emb_dim) or None
+        If the clasterization algo provides some embedding in some space then this is that embedding
+
+    """
+    def __init__(self, membership_matrix, topics, indices, embeddings=None, random_state=None):
         self.embeddings = embeddings
         self.random_state = random_state
-        self.mm = self.denoise(membership_matrix)
-        self.mm = self.cut(self.mm)
-        self.mm = self.denoise(self.mm)
+
+        self.mm = membership_matrix
+
+        # self.mm = self.make_row_stochastic(self.mm)  # normalazing rows according with fuzzy partition
+        self.mm = self.denoise(self.mm)  # deleting large(noisy) and too small clusters
+
+        # self.mm = self.cut(self.mm)
+        # self.mm = self.denoise(self.mm)
 
         self.n_clusters = self.mm.shape[1]
 
-        self.labels = self.get_labels(self.mm)
+        self.labels = self.get_labels(self.mm)  # for further visualization
 
         self.topics = np.array(topics)
+        self.indices = np.array(indices)
 
         self.n_topics, self.n_clusters = self.mm.shape
 
@@ -123,8 +142,21 @@ class Clusters:
         for i in range(self.n_clusters):
             yield self.get_cl_dict(i)
 
+    @staticmethod
+    def make_row_stochastic(mm):
+        """
+        Normalizing rows to add up to 1.
+        """
+        z = mm.sum(axis=1)
+        z[np.isclose(z, 0)] = 1.  # to escape 0 division
+        return mm / z[:, None]
 
-    def denoise(self, mm):
+
+    @staticmethod
+    def denoise(mm):
+        """
+        Deleting clusters with small or large number of elements
+        """
         n_topics, n_clusters = mm.shape
         mm_denoised = []
         for cl_idx in range(n_clusters):
@@ -166,13 +198,21 @@ class Clusters:
         return labels
 
     def show(self, idx):
+        """
+        Given the cluster idx printing it in convenient style
+        """
         cl_u = self.mm[:, idx]
-        cl = sorted(((t, t_u) for t, t_u in zip(self.topics, cl_u)),
-               key=lambda x: -x[1])
 
-        for (t, t_u) in cl:
-            if t_u > 0:
-                print(f'{t} :: {round(t_u,2)}')
+        cl = sorted(((t_idx, t, t_u) for t_idx, t, t_u in zip(self.indices, self.topics, cl_u)),
+               key=lambda x: -x[-1])  # sorting by membership
+
+        cl = list(filter(lambda x: x[2] > 0, cl))  # throwing away zero memberships
+        max_idx_len = max(map(lambda x: len(x[0]), cl))
+        max_name_len = max(map(lambda x: len(x[1]), cl))
+
+        for (t_idx, t, t_u) in cl:
+            s = f'{t_idx: <{max_idx_len}} :: {t: <{max_name_len}} :: {t_u:.2f}'
+            print(s)
 
     def get_cl_dict(self, idx):
         cl_u = self.mm[:, idx]
